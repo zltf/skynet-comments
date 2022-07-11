@@ -13,10 +13,10 @@
 #define MAX_MODULE_TYPE 32
 
 struct modules {
-	int count;
-	struct spinlock lock;
-	const char * path;
-	struct skynet_module m[MAX_MODULE_TYPE];
+	int count;  // modules的数量
+	struct spinlock lock;  // 自旋锁，避免多个线程同时向skynet_module写入数据，保证线程安全
+	const char * path;  // 由skynet配置表中的cpath指定，一般包含./cservice/?.so路径
+	struct skynet_module m[MAX_MODULE_TYPE];  // 存放服务模块的数组，最多32类
 };
 
 static struct modules * M = NULL;
@@ -62,6 +62,7 @@ _try_open(struct modules *m, const char * name) {
 	return dl;
 }
 
+// 从modules中找到
 static struct skynet_module * 
 _query(const char * name) {
 	int i;
@@ -129,6 +130,7 @@ skynet_module_query(const char * name) {
 	return result;
 }
 
+// 先判断没有create，没有的话就是一个全1的地址
 void * 
 skynet_module_instance_create(struct skynet_module *m) {
 	if (m->create) {
@@ -138,11 +140,13 @@ skynet_module_instance_create(struct skynet_module *m) {
 	}
 }
 
+// 一定得有init
 int
 skynet_module_instance_init(struct skynet_module *m, void * inst, struct skynet_context *ctx, const char * parm) {
 	return m->init(inst, ctx, parm);
 }
 
+// 可以没有release
 void 
 skynet_module_instance_release(struct skynet_module *m, void *inst) {
 	if (m->release) {
@@ -150,6 +154,7 @@ skynet_module_instance_release(struct skynet_module *m, void *inst) {
 	}
 }
 
+// 可以没有signal
 void
 skynet_module_instance_signal(struct skynet_module *m, void *inst, int signal) {
 	if (m->signal) {
@@ -157,13 +162,18 @@ skynet_module_instance_signal(struct skynet_module *m, void *inst, int signal) {
 	}
 }
 
+// 初始化modules
 void 
 skynet_module_init(const char *path) {
+    // 为modules分配空间
 	struct modules *m = skynet_malloc(sizeof(*m));
 	m->count = 0;
+    // 复制path，复制到堆
 	m->path = skynet_strdup(path);
 
+    // 初始化自旋锁
 	SPIN_INIT(m)
 
+    // 全局的M赋值
 	M = m;
 }

@@ -271,6 +271,7 @@ skynet_start(struct skynet_config * config) {
 	skynet_harbor_init(config->harbor);
 	skynet_handle_init(config->harbor);
 	skynet_mq_init();
+    // 加载c服务至modules list
 	skynet_module_init(config->module_path);
 	skynet_timer_init();
 	skynet_socket_init();
