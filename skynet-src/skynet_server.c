@@ -293,6 +293,7 @@ dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 		uint64_t cost_time = skynet_thread_time() - ctx->cpu_start;
 		ctx->cpu_cost += cost_time;
 	} else {
+        // 调用callback
 		reserve_msg = ctx->cb(ctx, ctx->cb_ud, type, msg->session, msg->source, msg->data, sz);
 	}
 	if (!reserve_msg) {
@@ -311,7 +312,7 @@ skynet_context_dispatchall(struct skynet_context * ctx) {
 	}
 }
 
-// 消息分发
+// 消息分发，由工作线程调用
 struct message_queue * 
 skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue *q, int weight) {
 	if (q == NULL) {
@@ -337,10 +338,13 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 
 	for (i=0;i<n;i++) {
 		if (skynet_mq_pop(q,&msg)) {
+            // 弹出失败
 			skynet_context_release(ctx);
+            // 直接返回下一个次级消息队列，本消息队列不再加入全局消息队列
 			return skynet_globalmq_pop();
 		} else if (i==0 && weight >= 0) {
 			n = skynet_mq_length(q);
+            // n = 队列长度 / 2 ^ weight
 			n >>= weight;
 		}
 		int overload = skynet_mq_overload(q);
@@ -360,13 +364,16 @@ skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue 
 	}
 
 	assert(q == ctx->queue);
+    // 下一个要处理的次级消息队列
 	struct message_queue *nq = skynet_globalmq_pop();
 	if (nq) {
 		// If global mq is not empty , push q back, and return next queue (nq)
 		// Else (global mq is empty or block, don't push q back, and return q again (for next dispatch)
-		skynet_globalmq_push(q);
+        // 如果全局消息队列不为空，就把本次处理的次级消息队列压入，并返回下一个次级消息队列
+		// 否则（全局消息队列为空或被阻塞），不压入本次处理的次级消息队列，并返回本次处理的次级消息队列
+        skynet_globalmq_push(q);
 		q = nq;
-	} 
+	}
 	skynet_context_release(ctx);
 
 	return q;

@@ -47,6 +47,7 @@ void
 skynet_globalmq_push(struct message_queue * queue) {
 	struct global_queue *q= Q;
 
+    // 加自旋锁
 	SPIN_LOCK(q)
 	assert(queue->next == NULL);
 	if(q->tail) {
@@ -63,6 +64,7 @@ struct message_queue *
 skynet_globalmq_pop() {
 	struct global_queue *q = Q;
 
+    // 加自旋锁
 	SPIN_LOCK(q)
 	struct message_queue *mq = q->head;
 	if(mq) {
@@ -138,14 +140,17 @@ skynet_mq_overload(struct message_queue *q) {
 	return 0;
 }
 
+// 从次级消息队列弹出一条消息，如果队列是空的，弹出失败，就返回1，成功返回0
 int
 skynet_mq_pop(struct message_queue *q, struct skynet_message *message) {
 	int ret = 1;
 	SPIN_LOCK(q)
 
+    // 如果此时head和tail相等，说明队列是空的
 	if (q->head != q->tail) {
         // head前移
 		*message = q->queue[q->head++];
+        // 弹出成功
 		ret = 0;
 		int head = q->head;
 		int tail = q->tail;
@@ -170,6 +175,7 @@ skynet_mq_pop(struct message_queue *q, struct skynet_message *message) {
 		q->overload_threshold = MQ_OVERLOAD;
 	}
 
+    // 队列空了，弹出失败，就不尽然global_mq了
 	if (ret) {
 		q->in_global = 0;
 	}

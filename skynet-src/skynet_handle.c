@@ -58,6 +58,7 @@ skynet_handle_register(struct skynet_context *ctx) {
 			}
 		}
 		assert((s->slot_size*2 - 1) <= HANDLE_MASK);
+        // 扩容
 		struct skynet_context ** new_slot = skynet_malloc(s->slot_size * 2 * sizeof(struct skynet_context *));
 		memset(new_slot, 0, s->slot_size * 2 * sizeof(struct skynet_context *));
 		for (i=0;i<s->slot_size;i++) {

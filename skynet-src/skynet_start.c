@@ -133,6 +133,7 @@ thread_timer(void *p) {
 		skynet_updatetime();
 		skynet_socket_updatetime();
 		CHECK_ABORT
+        // 每隔2.5毫秒唤醒一条worker线程
 		wakeup(m,m->count-1);
 		usleep(2500);
 		if (SIG) {
@@ -160,6 +161,7 @@ thread_worker(void *p) {
 	skynet_initthread(THREAD_WORKER);
 	struct message_queue * q = NULL;
 	while (!m->quit) {
+        // 不断处理消息
 		q = skynet_context_message_dispatch(sm, q, weight);
 		if (q == NULL) {
 			if (pthread_mutex_lock(&m->mutex) == 0) {
@@ -167,6 +169,7 @@ thread_worker(void *p) {
 				// "spurious wakeup" is harmless,
 				// because skynet_context_message_dispatch() can be call at any time.
 				if (!m->quit)
+                    // 全局消息队列中没有次级消息队列，工作线程进入休眠
 					pthread_cond_wait(&m->cond, &m->mutex);
 				-- m->sleep;
 				if (pthread_mutex_unlock(&m->mutex)) {
@@ -202,16 +205,29 @@ start(int thread) {
 		exit(1);
 	}
 
+    // 创建monitor、timer、socket线程
 	create_thread(&pid[0], thread_monitor, m);
 	create_thread(&pid[1], thread_timer, m);
 	create_thread(&pid[2], thread_socket, m);
 
+    // 每个工作线程有一个权重值
+    // 权重值小于0，一次消费一条
+    // 权重值等于0，一次性消费完
+    // 权重值大于0，队列长度 / 2 ^ weight
+    // 第1-4条worker线程，每次只消费一个次级消息队列的消息
+    // 第5-8条线程一次消费整个次级消息队列的消息
+    // 第9-16条worker线程一次消费的消息数目大约是整个次级消息队列长度的一半
+    // 第17-24条线程一次消费的消息数大约是整个次级消息队列长度的四分之一
+    // 而第25-32条worker线程，则大约是次级消息总长度的八分之一
+    // 防止大量线程等待全局消息队列出队的自旋锁，提升并发能力
+    // 前4条线程可以保证没有服务被饿死
 	static int weight[] = { 
 		-1, -1, -1, -1, 0, 0, 0, 0,
 		1, 1, 1, 1, 1, 1, 1, 1, 
 		2, 2, 2, 2, 2, 2, 2, 2, 
 		3, 3, 3, 3, 3, 3, 3, 3, };
 	struct worker_parm wp[thread];
+    // 创建thread个工作线程
 	for (i=0;i<thread;i++) {
 		wp[i].m = m;
 		wp[i].id = i;
