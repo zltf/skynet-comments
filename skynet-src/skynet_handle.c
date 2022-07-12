@@ -136,17 +136,20 @@ skynet_handle_retireall() {
 	}
 }
 
+// 查找对应handle的context（会增加引用计数）
 struct skynet_context * 
 skynet_handle_grab(uint32_t handle) {
 	struct handle_storage *s = H;
 	struct skynet_context * result = NULL;
 
+    // 访问一个服务的机会远大于创建并写入列表的机会，所以用读写锁
 	rwlock_rlock(&s->lock);
 
 	uint32_t hash = handle & (s->slot_size-1);
 	struct skynet_context * ctx = s->slot[hash];
 	if (ctx && skynet_context_handle(ctx) == handle) {
 		result = ctx;
+        // 增加引用计数
 		skynet_context_grab(result);
 	}
 

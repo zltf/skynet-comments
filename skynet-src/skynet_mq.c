@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stdbool.h>
 
+// 次级消息队列初始容量
 #define DEFAULT_QUEUE_SIZE 64
 #define MAX_GLOBAL_MQ 0x10000
 
@@ -18,24 +19,26 @@
 #define MQ_IN_GLOBAL 1
 #define MQ_OVERLOAD 1024
 
+// 次级消息队列
 struct message_queue {
-	struct spinlock lock;
-	uint32_t handle;
-	int cap;
-	int head;
-	int tail;
-	int release;
-	int in_global;
-	int overload;
-	int overload_threshold;
-	struct skynet_message *queue;
-	struct message_queue *next;
+	struct spinlock lock;   // 自旋锁，额能会有多个线程向同一个队列写入的情况
+	uint32_t handle;        // 拥有此消息队列的服务的id
+	int cap;        // 消息队列容量（有扩容机制）
+	int head;       // 头部index
+	int tail;       // 尾部index
+	int release;    // 是否能释放消息
+	int in_global;  // 是否在全局消息队列中（0：不是，1：是）
+	int overload;   // 是否过载
+	int overload_threshold;         // 过载阈值
+	struct skynet_message *queue;   // 消息队列，是一个动态分配的数组
+	struct message_queue *next;     // 下一个次级消息队列的指针
 };
 
+// 全局消息队列
 struct global_queue {
-	struct message_queue *head;
-	struct message_queue *tail;
-	struct spinlock lock;
+	struct message_queue *head;     // 头指针
+	struct message_queue *tail;     // 尾指针
+	struct spinlock lock;           // 自旋锁
 };
 
 static struct global_queue *Q = NULL;
@@ -50,6 +53,7 @@ skynet_globalmq_push(struct message_queue * queue) {
 		q->tail->next = queue;
 		q->tail = queue;
 	} else {
+        // 处理第一个节点
 		q->head = q->tail = queue;
 	}
 	SPIN_UNLOCK(q)
@@ -140,17 +144,21 @@ skynet_mq_pop(struct message_queue *q, struct skynet_message *message) {
 	SPIN_LOCK(q)
 
 	if (q->head != q->tail) {
+        // head前移
 		*message = q->queue[q->head++];
 		ret = 0;
 		int head = q->head;
 		int tail = q->tail;
 		int cap = q->cap;
 
+        // head超出容量，回绕
 		if (head >= cap) {
 			q->head = head = 0;
 		}
+        // 计算长度
 		int length = tail - head;
 		if (length < 0) {
+            // 尾在前的情况
 			length += cap;
 		}
 		while (length > q->overload_threshold) {
@@ -186,17 +194,22 @@ expand_queue(struct message_queue *q) {
 	q->queue = new_queue;
 }
 
+// 向mq写入message
 void 
 skynet_mq_push(struct message_queue *q, struct skynet_message *message) {
 	assert(message);
 	SPIN_LOCK(q)
 
 	q->queue[q->tail] = *message;
+    // tail前移
 	if (++ q->tail >= q->cap) {
+        // 超出容量后回绕
 		q->tail = 0;
 	}
 
+    // push后头尾相等，表示队列满了
 	if (q->head == q->tail) {
+        // 扩容
 		expand_queue(q);
 	}
 

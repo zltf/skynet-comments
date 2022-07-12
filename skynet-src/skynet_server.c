@@ -121,13 +121,16 @@ drop_message(struct skynet_message *msg, void *ud) {
 	skynet_send(NULL, source, msg->source, PTYPE_ERROR, 0, NULL, 0);
 }
 
+// 创建C服务
 struct skynet_context * 
 skynet_context_new(const char * name, const char *param) {
+    // 获取服务的module
 	struct skynet_module * mod = skynet_module_query(name);
 
 	if (mod == NULL)
 		return NULL;
 
+    // 调用服务的create函数
 	void *inst = skynet_module_instance_create(mod);
 	if (inst == NULL)
 		return NULL;
@@ -136,6 +139,7 @@ skynet_context_new(const char * name, const char *param) {
 
 	ctx->mod = mod;
 	ctx->instance = inst;
+    // 引用计数设为2 ？
 	ATOM_INIT(&ctx->ref , 2);
 	ctx->cb = NULL;
 	ctx->cb_ud = NULL;
@@ -152,11 +156,13 @@ skynet_context_new(const char * name, const char *param) {
 	// Should set to 0 first to avoid skynet_handle_retireall get an uninitialized handle
 	ctx->handle = 0;	
 	ctx->handle = skynet_handle_register(ctx);
+    // 创建次级消息队列
 	struct message_queue * queue = ctx->queue = skynet_mq_create(ctx->handle);
 	// init function maybe use ctx->handle, so it must init at last
 	context_inc();
 
 	CHECKCALLING_BEGIN(ctx)
+    // 调用服务的init函数
 	int r = skynet_module_instance_init(mod, inst, ctx, param);
 	CHECKCALLING_END(ctx)
 	if (r == 0) {
@@ -191,6 +197,7 @@ skynet_context_newsession(struct skynet_context *ctx) {
 	return session;
 }
 
+// 增加引用计数
 void 
 skynet_context_grab(struct skynet_context *ctx) {
 	ATOM_FINC(&ctx->ref);
@@ -204,34 +211,44 @@ skynet_context_reserve(struct skynet_context *ctx) {
 	context_dec();
 }
 
+// 删除context
 static void 
 delete_context(struct skynet_context *ctx) {
+    // 关闭log文件
 	FILE *f = (FILE *)ATOM_LOAD(&ctx->logfile);
 	if (f) {
 		fclose(f);
 	}
+    // 调用服务的release函数（服务内编写）
 	skynet_module_instance_release(ctx->mod, ctx->instance);
+    // 将次级消息队列写回全局消息队列
 	skynet_mq_mark_release(ctx->queue);
 	CHECKCALLING_DESTROY(ctx)
 	skynet_free(ctx);
 	context_dec();
 }
 
+// 释放一个context（有引用计数）
 struct skynet_context * 
 skynet_context_release(struct skynet_context *ctx) {
+    // 引用计数减一
 	if (ATOM_FDEC(&ctx->ref) == 1) {
-		delete_context(ctx);
+		// 没有引用就删除context
+        delete_context(ctx);
 		return NULL;
 	}
 	return ctx;
 }
 
+// 向服务的消息队列写入消息
 int
 skynet_context_push(uint32_t handle, struct skynet_message *message) {
-	struct skynet_context * ctx = skynet_handle_grab(handle);
+	// 查找对应handle的context（会增加引用计数）
+    struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {
 		return -1;
 	}
+    // 向消息队列写入消息
 	skynet_mq_push(ctx->queue, message);
 	skynet_context_release(ctx);
 
@@ -294,16 +311,20 @@ skynet_context_dispatchall(struct skynet_context * ctx) {
 	}
 }
 
+// 消息分发
 struct message_queue * 
 skynet_context_message_dispatch(struct skynet_monitor *sm, struct message_queue *q, int weight) {
 	if (q == NULL) {
+        // 取出一个次级消息队列
 		q = skynet_globalmq_pop();
 		if (q==NULL)
 			return NULL;
 	}
 
+    // 该消息队列对应服务的handle
 	uint32_t handle = skynet_mq_handle(q);
 
+    // 对应服务的context
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {
 		struct drop_t d = { handle };
