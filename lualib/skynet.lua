@@ -55,6 +55,7 @@ function skynet.register_protocol(class)
 	proto[id] = class
 end
 
+-- session和协程间的映射
 local session_id_coroutine = {}
 local session_coroutine_id = {}
 local session_coroutine_address = {}
@@ -64,6 +65,7 @@ local unresponse = {}
 local wakeup_queue = {}
 local sleep_session = {}
 
+-- 关注的session
 local watching_session = {}
 local error_queue = {}
 local fork_queue = { h = 1, t = 0 }
@@ -243,14 +245,22 @@ local function _error_dispatch(error_session, error_source)
 end
 
 -- coroutine reuse
-
+-- 协程池，是一个键值弱引用表
 local coroutine_pool = setmetatable({}, { __mode = "kv" })
 
+-- 创建协程
 local function co_create(f)
+    -- 弹出最后一个元素
 	local co = tremove(coroutine_pool)
 	if co == nil then
+        -- 协程池中没有可用的协程，创建新的
 		co = coroutine_create(function(...)
+            -- 调用f函数
+            -- 创建协程时，并不会立即执行，只有调用coroutine.resume时，才会执行内部逻辑
+            -- 这行代码，只有在首次创建时会被调用
 			f(...)
+            -- 回调函数执行完，协程本次调用的使命就完成了，但是为了实现复用
+            -- 这里不能让协程退出，而是将upvalue回调函数f赋值为空，再放入协程缓存池中，并且挂起，以便下次使用
 			while true do
 				local session = session_coroutine_id[co]
 				if session and session ~= 0 then
@@ -273,22 +283,29 @@ local function co_create(f)
 				end
 
 				-- recycle co into pool
+                -- 清空f函数
 				f = nil
+                -- 将协程放回协程池
 				coroutine_pool[#coroutine_pool+1] = co
 				-- recv new main function f
-				f = coroutine_yield "SUSPEND"
-				f(coroutine_yield())
+                -- “SUSPEND”是挂起类型，会传给suspend函数
+				f = coroutine_yield "SUSPEND" -- （1）
+				f(coroutine_yield()) -- （2）设置完f函数后就挂起这个协程，等待后面执行
 			end
 		end)
 	else
+        -- 协程池中还有协程，直接复用
 		-- pass the main function f to coroutine, and restore running thread
-		local running = running_thread
+		-- 保存当前运行的协程的现场，后面的resume只用来设置协程的f函数，设置完就挂起了，不影响现在正在执行的协程
+        local running = running_thread
+        -- 唤醒（1）处代码并将新的f函数赋值给（1）处的f
 		coroutine_resume(co, f)
 		running_thread = running
 	end
 	return co
 end
 
+-- suspend函数当类型是SUSPEND时执行此函数
 local function dispatch_wakeup()
 	while true do
 		local token = tremove(wakeup_queue,1)
@@ -371,11 +388,14 @@ end
 
 skynet.trace_timeout(false)	-- turn off by default
 
+-- ti秒后执行函数
 function skynet.timeout(ti, func)
 	local session = c.intcommand("TIMEOUT",ti)
 	assert(session)
+    -- 创建协程
 	local co = co_create_for_timeout(func, ti)
 	assert(session_id_coroutine[session] == nil)
+    -- 以session为键保存当前的协程
 	session_id_coroutine[session] = co
 	return co	-- for debug
 end
@@ -584,6 +604,8 @@ skynet.trash = assert(c.trash)
 
 local function yield_call(service, session)
 	watching_session[session] = service
+    -- 以session为键保存当前的协程
+    -- call返回的时候唤醒该协程
 	session_id_coroutine[session] = running_thread
 	local succ, msg, sz = coroutine_yield "SUSPEND"
 	watching_session[session] = nil
@@ -600,11 +622,14 @@ function skynet.call(addr, typename, ...)
 		c.send(addr, skynet.PTYPE_TRACE, 0, tag)
 	end
 
+    -- 获取对应消息解析协议
 	local p = proto[typename]
+    -- 调用send发送请求
 	local session = c.send(addr, p.id , nil , p.pack(...))
 	if session == nil then
 		error("call to invalid address " .. skynet.address(addr))
 	end
+    -- 挂起当前协程并等待返回
 	return p.unpack(yield_call(addr, session))
 end
 
@@ -772,19 +797,27 @@ local trace_source = {}
 local function raw_dispatch_message(prototype, msg, sz, session, source)
 	-- skynet.PTYPE_RESPONSE = 1, read skynet.h
 	if prototype == 1 then
+        -- 调用call的返回
+        -- 找到对应session被挂起的协程
 		local co = session_id_coroutine[session]
 		if co == "BREAK" then
 			session_id_coroutine[session] = nil
 		elseif co == nil then
 			unknown_response(session, source, msg, sz)
 		else
+            -- 正常返回
 			local tag = session_coroutine_tracetag[co]
 			if tag then c.trace(tag, "resume") end
+            -- 清除session和协程间的映射
 			session_id_coroutine[session] = nil
+            -- 唤醒被挂起的协程
 			suspend(co, coroutine_resume(co, true, msg, sz, session))
 		end
 	else
+        -- send来的消息
+        -- 找到对应的消息解析协议
 		local p = proto[prototype]
+        -- 消息类型错误处理
 		if p == nil then
 			if prototype == skynet.PTYPE_TRACE then
 				-- trace next request
@@ -799,6 +832,8 @@ local function raw_dispatch_message(prototype, msg, sz, session, source)
 
 		local f = p.dispatch
 		if f then
+            -- 获取一个协程（如果协程池中有空闲的协程，则直接获取，否则重新创建一个）
+            -- 让该协程执行消息处理协议的回调函数dispatch
 			local co = co_create(f)
 			session_coroutine_id[co] = session
 			session_coroutine_address[co] = source
@@ -819,6 +854,8 @@ local function raw_dispatch_message(prototype, msg, sz, session, source)
 					skynet.trace()
 				end
 			end
+            -- 启动并执行协程，将协程执行的结果返回给suspend函数，返回结果，就是一个coroutine挂起的原因
+            -- 这个suspend函数，就是针对coroutine挂起的不同原因，做专门的处理
 			suspend(co, coroutine_resume(co, session,source, p.unpack(msg,sz)))
 		else
 			trace_source[source] = nil
@@ -832,7 +869,9 @@ local function raw_dispatch_message(prototype, msg, sz, session, source)
 end
 
 function skynet.dispatch_message(...)
+    -- 处理当前消息
 	local succ, err = pcall(raw_dispatch_message,...)
+	-- 按顺序执行之前通过调用skynet.fork创建的协程
 	while true do
 		if fork_queue.h > fork_queue.t then
 			-- queue is empty
@@ -860,6 +899,7 @@ function skynet.dispatch_message(...)
 end
 
 function skynet.newservice(name, ...)
+    -- 调用launcher服务来创建新服务
 	return skynet.call(".launcher", "lua" , "LAUNCH", "snlua", name, ...)
 end
 

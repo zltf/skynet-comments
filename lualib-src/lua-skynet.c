@@ -126,6 +126,7 @@ lcommand(lua_State *L) {
 		parm = luaL_checkstring(L,2);
 	}
 
+    // param 为 "snlua", name, ...
 	result = skynet_command(context, cmd, parm);
 	if (result) {
 		lua_pushstring(L, result);

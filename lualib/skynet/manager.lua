@@ -13,7 +13,10 @@ local function number_address(name)
 	end
 end
 
+-- 启动服务
+-- ... 为 "snlua", name, ...
 function skynet.launch(...)
+    -- 传给c层
 	local addr = c.command("LAUNCH", table.concat({...}," "))
 	if addr then
 		return tonumber(string.sub(addr , 2), 16)

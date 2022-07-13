@@ -470,6 +470,7 @@ snlua_init(struct snlua *l, struct skynet_context *ctx, const char * args) {
 	int sz = strlen(args);
 	char * tmp = skynet_malloc(sz);
 	memcpy(tmp, args, sz);
+    // 绑定callback
 	skynet_callback(ctx, l , launch_cb);
 	const char * self = skynet_command(ctx, "REG", NULL);
 	uint32_t handle_id = strtoul(self+1, NULL, 16);
@@ -502,6 +503,7 @@ struct snlua *
 snlua_create(void) {
 	struct snlua * l = skynet_malloc(sizeof(*l));
 	memset(l,0,sizeof(*l));
+    // 1024 * 1024 * 32
 	l->mem_report = MEMORY_WARNING_REPORT;
 	l->mem_limit = 0;
 	l->L = lua_newstate(lalloc, l);

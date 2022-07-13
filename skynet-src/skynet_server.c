@@ -508,14 +508,20 @@ cmd_kill(struct skynet_context * context, const char * param) {
 	return NULL;
 }
 
+// 启动服务
+// param 为 "snlua", name, ...
 static const char *
 cmd_launch(struct skynet_context * context, const char * param) {
 	size_t sz = strlen(param);
+    // 复制一份param
 	char tmp[sz+1];
 	strcpy(tmp,param);
 	char * args = tmp;
+    // 字符串分割（得到snlua）
 	char * mod = strsep(&args, " \t\r\n");
+    // 去除回车换行后的内容
 	args = strsep(&args, "\r\n");
+    // 创建新服务
 	struct skynet_context * inst = skynet_context_new(mod,args);
 	if (inst == NULL) {
 		return NULL;
@@ -671,6 +677,7 @@ cmd_signal(struct skynet_context * context, const char * param) {
 	return NULL;
 }
 
+// 命令和函数名映射
 static struct command_func cmd_funcs[] = {
 	{ "TIMEOUT", cmd_timeout },
 	{ "REG", cmd_reg },
@@ -691,9 +698,11 @@ static struct command_func cmd_funcs[] = {
 	{ NULL, NULL },
 };
 
+// 执行命令
 const char * 
 skynet_command(struct skynet_context * context, const char * cmd , const char * param) {
 	struct command_func * method = &cmd_funcs[0];
+    // 遍历找到对应的函数
 	while(method->name) {
 		if (strcmp(cmd, method->name) == 0) {
 			return method->func(context, param);

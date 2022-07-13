@@ -12,6 +12,7 @@ local function handle_to_address(handle)
 	return tonumber("0x" .. string.sub(handle , 2))
 end
 
+-- 无返回标记
 local NORET = {}
 
 function command.LIST()
@@ -90,8 +91,12 @@ function command.REMOVE(_, handle, kill)
 	return NORET
 end
 
+-- 启动服务
+-- service 为 "snlua" & ... 为name, ...
 local function launch_service(service, ...)
 	local param = table.concat({...}, " ")
+    -- 启动服务
+    -- service 为 "snlua" & param 为name, ...
 	local inst = skynet.launch(service, param)
 	local session = skynet.context()
 	local response = skynet.response()
@@ -106,7 +111,9 @@ local function launch_service(service, ...)
 	return inst
 end
 
+-- 启动服务
 function command.LAUNCH(_, service, ...)
+    -- service 为 "snlua" & ... 为name, ...
 	launch_service(service, ...)
 	return NORET
 end
@@ -169,10 +176,13 @@ skynet.register_protocol {
 	end,
 }
 
+-- 消息分发函数
 skynet.dispatch("lua", function(session, address, cmd , ...)
+    -- 转大写
 	cmd = string.upper(cmd)
 	local f = command[cmd]
 	if f then
+        -- ... 为 "snlua", name, ...
 		local ret = f(address, ...)
 		if ret ~= NORET then
 			skynet.ret(skynet.pack(ret))
